@@ -3,9 +3,9 @@ Alzheimer’s disease
 Ruben Cabrera
 2024-07-19
 
-## R Markdown
+## Introduction to Nonlinear Mixed Effects Modeling
 
-This is an R Markdown document.
+Based in <https://github.com/larslau/progmod?tab=readme-ov-file>
 
 ``` r
 # install.packages('devtools')
