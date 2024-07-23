@@ -13,20 +13,247 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+This is an R Markdown document. 
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r intro}
+# install.packages('devtools')
+# devtools::install_github('larslau/progmod')
 
-```{r cars}
-summary(cars)
+library(progmod)
+library(ggplot2)
 ```
 
-## Including Plots
+## Data
 
-You can also embed plots, for example:
+```{r data}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+summary(adas_mmse_data)
+str(adas_mmse_data)
+head(adas_mmse_data)
+
+# Expressing blstatus as factor (ordered):
+
+adas_mmse_data$blstatus <- factor(adas_mmse_data$blstatus, levels = c("Cognitively normal", "MCI", "Dementia")) 
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+As you can see, we have the variables ADAS13 and MMSE, indicators of mental capacity.
+The bigger ADAS13 number, the lower mental capacity
+The lower MMSE scores, the lower mental capacity.
+
+
+We have also predefined blstatus as:
+
+-   Cognitively normal
+-   MCI
+-   Dementia
+
+Let's explore the data with some plots
+
+
+
+
+
+```{r ini_plots}
+plot(adas_mmse_data$ADAS13,adas_mmse_data$MMSE)
+plot(adas_mmse_data$Month_bl,adas_mmse_data$MMSE)
+
+boxplot(adas_mmse_data$ADAS13 ~ adas_mmse_data$blstatus)
+boxplot(adas_mmse_data$MMSE ~ adas_mmse_data$blstatus)
+
+sampledata <- adas_mmse_data[adas_mmse_data$subject_id == 627 | adas_mmse_data$subject_id == 358 | adas_mmse_data$subject_id == 168,]
+
+sampledata
+
+
+## ADAS13 for sampledata
+
+ggplot(sampledata, aes(x = Month_bl, y = ADAS13)) +
+geom_line(aes(group = subject_id, color = blstatus)) +
+ylim(c(85, 0)) + xlab('Months since baseline')
+
+## MMSE for sampledata
+
+ggplot(sampledata, aes(x = Month_bl, y = MMSE)) +
+geom_line(aes(group = subject_id, color = blstatus)) +
+ylim(c(0, 30)) + xlab('Months since baseline')
+
+## ADAS13 for all data
+
+ggplot(adas_mmse_data, aes(x = Month_bl, y = ADAS13)) +
+geom_line(aes(group = subject_id, color = blstatus)) +
+ylim(c(85, 0)) + xlab('Months since baseline')
+
+## MMSE for all data
+
+ggplot(adas_mmse_data, aes(x = Month_bl, y = MMSE)) +
+geom_line(aes(group = subject_id, color = blstatus)) +
+ylim(c(0, 30)) + xlab('Months since baseline')
+
+
+```
+
+## Model to simulated ADAS-cog scores
+
+Fit exponential disease progression model to simulated ADAS-cog scores
+
+```{r adas13model}
+fixed_start_coef <- c(0.5, 70, 150, 3.5, 10)
+
+ADAS_progmod <- progmod(ADAS13 ~ exp_model(Month_bl, l, s, g, v),
+                     data = subset(adas_mmse_data, !is.na(ADAS13)),
+                     fixed = list(l ~ 1,
+                                  s ~ MCI + DEM - 1,
+                                  g ~ 1,
+                                  v ~ 1),
+                     random = s + v ~ 1 | subject_id,
+                     start = fixed_start_coef,
+                     covariance = NULL)
+
+summary(ADAS_progmod)
+
+# Predict from model and visualize results
+adas_mmse_data$fixed_shift_adas <- with(adas_mmse_data,
+                                       MCI * fixed.effects(ADAS_progmod)[2] +
+                                        DEM * fixed.effects(ADAS_progmod)[3])
+
+pred_rand <- random.effects(ADAS_progmod)
+
+adas_mmse_data$random_shift_adas <- pred_rand[match(adas_mmse_data$subject_id, 
+                                                    rownames(pred_rand)), 's.(Intercept)']
+
+
+sampledata <- adas_mmse_data[adas_mmse_data$subject_id == 627 | adas_mmse_data$subject_id == 358 | adas_mmse_data$subject_id == 168,]
+
+sampledata
+
+ggplot(sampledata, aes(x = Month_bl + fixed_shift_adas + random_shift_adas, y = ADAS13)) +
+    geom_line(aes(group = subject_id, color = blstatus)) +
+    ylim(c(85, 0)) +
+    xlab('Months since baseline')
+
+ggplot(adas_mmse_data, aes(x = Month_bl + fixed_shift_adas + random_shift_adas, y = ADAS13)) +
+    geom_line(aes(group = subject_id, color = blstatus)) +
+    ylim(c(85, 0)) +
+    xlab('Months since baseline')
+
+```
+
+
+## Model to simulated MMSE scores
+
+Fit generalized logistic model with range [30, 0] and a random time shift
+
+```{r mmsemodel}
+fixed_start_coef <- c(B = 0.025,
+                      v = 1.4,
+                      `s.(Intercept)` = -100,
+                      s.MCI = 26,
+                      s.DEM = 75)
+
+MMSE_progmod_glf <- progmod(MMSE ~ GLF(Month_bl, A = 30, K = 0, B, v, s, c = 0),
+                            data = subset(adas_mmse_data, !is.na(MMSE)),
+                            fixed = list(B ~ 1,
+                                         v ~ 1,
+                                         s ~ MCI + DEM + 1),
+                            random = s ~ 1 | subject_id,
+                            start = fixed_start_coef,
+                            covariance = NULL)
+
+summary(MMSE_progmod_glf)
+
+# Predict from model and visualize results
+adas_mmse_data$fixed_shift_mmse <- with(adas_mmse_data,
+                                        fixed.effects(MMSE_progmod_glf)[3] +
+                                        MCI * fixed.effects(MMSE_progmod_glf)[4] +
+                                        DEM * fixed.effects(MMSE_progmod_glf)[5])
+
+pred_rand <- random.effects(MMSE_progmod_glf)
+
+adas_mmse_data$random_shift_mmse <- pred_rand[match(adas_mmse_data$subject_id, 
+                                                    rownames(pred_rand)), 's.(Intercept)']
+
+
+sampledata <- adas_mmse_data[adas_mmse_data$subject_id == 627 | adas_mmse_data$subject_id == 358 | adas_mmse_data$subject_id == 168,]
+
+sampledata
+
+ggplot(sampledata, aes(x = Month_bl + fixed_shift_mmse + random_shift_mmse, y = MMSE)) +
+    geom_line(aes(group = subject_id, color = blstatus)) +
+    xlab('Months since baseline')
+
+ggplot(adas_mmse_data, aes(x = Month_bl + fixed_shift_mmse + random_shift_mmse, y = MMSE)) +
+    geom_line(aes(group = subject_id, color = blstatus)) +
+    xlab('Months since baseline')
+
+```
+
+## Format
+
+```{r format}
+
+# Stack data to long format
+tmp1 <- adas_mmse_data[, c('subject_id', 'Month_bl', 'CN', 'MCI', 'DEM', 'ADAS13')]
+
+names(tmp1)[6] <- 'value'
+
+tmp1$scale <- 'ADAS13'
+
+tmp2 <- adas_mmse_data[, c('subject_id', 'Month_bl', 'CN', 'MCI', 'DEM', 'MMSE')]
+
+names(tmp2)[6] <- 'value'
+
+tmp2$scale <- 'MMSE'
+
+# Long data
+adas_mmse_data_long <- na.omit(rbind(tmp1, tmp2))
+
+adas_mmse_data_long$scale <- factor(adas_mmse_data_long$scale)
+
+# Remove temporary files
+rm(tmp1, tmp2)
+
+# Fit multivariate exponential model
+fixed_start_coef <- c(l.scaleADAS13 = 0.5,
+                      l.scaleMMSE = -0.1,
+                      s.MCI = 70,
+                      s.DEM = 150,
+                      g.scaleADAS13 = 3.5,
+                      g.scaleMMSE = 3,
+                      v.scaleADAS13 = 10,
+                      v.scaleMMSE = 30)
+
+
+
+multi_progmod_glf <- progmod(value ~ exp_model(Month_bl, l, s, g, v),
+                             data = adas_mmse_data_long,
+                             fixed = list(l ~ scale + 0,
+                                          s ~ MCI + DEM + 0,
+                                          g ~ scale + 0,
+                                          v ~ scale + 0),
+                             random = list(s ~ 1,
+                                           v ~ scale),
+                             groups = ~ subject_id,
+                             start = fixed_start_coef,
+                             weights = varIdent(form = ~ 1 | scale))
+
+# Predict from model and compare to univariate models
+adas_mmse_data$fixed_shift_multi <- with(adas_mmse_data,
+                                         MCI * fixed.effects(multi_progmod_glf)[3] +
+                                           DEM * fixed.effects(multi_progmod_glf)[4])
+
+pred_rand <- random.effects(multi_progmod_glf)
+
+adas_mmse_data$random_shift_multi <- pred_rand[match(adas_mmse_data$subject_id, 
+                                                     rownames(pred_rand)), 's.(Intercept)']
+
+# Correlations between predicted disease months
+with(adas_mmse_data, cor(cbind(fixed_shift_adas + random_shift_adas,
+                               fixed_shift_mmse + random_shift_mmse,
+                               fixed_shift_multi + random_shift_multi), method = 'spearman'))
+ 
+ 
+
+
+
+
+```
